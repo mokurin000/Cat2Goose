@@ -1,13 +1,23 @@
 import yaml
 
 from sys import argv, stderr
+from collections.abc import Iterable
 from functools import partial
 from importlib.metadata import version
 
 DEFAULT_OUTBOUNDS = ["direct", "block"]
 
 
-def translate(group_set: set[str], rule: str) -> str | None:
+class GooseRule:
+    def __init__(self, rule_type: str, content: str, target_group: str):
+        self.rule_type = rule_type
+        self.content = content
+        self.target_group = target_group
+
+
+def translate(
+    group_set: set[str], rename_map: dict[str, str], rule: str
+) -> GooseRule | None:
     if rule.startswith("MATCH"):
         return None
 
@@ -26,21 +36,31 @@ def translate(group_set: set[str], rule: str) -> str | None:
     elif "reject" in group_lower:
         group = "block"
 
+    group = rename_map.get(group, group)
     group_set.add(group)
 
     match rule_type.upper():
         case "DOMAIN":
-            return f"domain(full: {content}) -> {group}"
+            return GooseRule(
+                rule_type="domain", content=f"full:{content}", target_group=group
+            )
         case "DOMAIN-KEYWORD":
-            return f"domain(keyword: {content}) -> {group}"
+            return GooseRule(
+                rule_type="domain", content=f"keyword:{content}", target_group=group
+            )
         case "DOMAIN-SUFFIX":
-            return f"domain(suffix: {content}) -> {group}"
+            return GooseRule(
+                rule_type="domain", content=f"suffix:{content}", target_group=group
+            )
         case "IP-CIDR":
-            return f"dip({content}) -> {group}"
+            return GooseRule(rule_type="dip", content=content, target_group=group)
         case "IP-CIDR6":
-            return f'dip("{content}") -> {group}'
+            return GooseRule(
+                rule_type="dip", content=content.__repr__(), target_group=group
+            )
         case "GEOIP":
-            return f"dip(geoip:{content.lower()}) -> {group}"
+            content = f"geoip:{content.lower()}"
+            return GooseRule(rule_type="dip", content=content, target_group=group)
 
         # Impossible to goose
         case "PROCESS-NAME":
@@ -53,8 +73,14 @@ def translate(group_set: set[str], rule: str) -> str | None:
 
 def main():
     yaml_path = argv[1]
+    rename_map = {}
+
     with open(yaml_path, "r", encoding="utf-8") as f:
         data = yaml.load(f, Loader=yaml.Loader)
+
+    for arg in argv[2:]:
+        origin, new = arg.split(":")
+        rename_map[origin] = new
 
     groups = set()
 
@@ -62,12 +88,15 @@ def main():
         print("'rules' not found!", file=stderr)
         return
 
-    generated = "\n".join(
-        filter(
-            lambda line: line is not None,
-            map(partial(translate, groups), data["rules"]),
-        )
+    goose_rules: Iterable[GooseRule] = filter(
+        lambda rule: rule is not None,
+        map(partial(translate, groups, rename_map), data["rules"]),
     )
+    goose_groups: dict[tuple[str, str], set[str]] = {}
+    for goose_rule in goose_rules:
+        group_key = (goose_rule.rule_type, goose_rule.target_group)
+        goose_groups[group_key] = goose_groups.get(group_key, set())
+        goose_groups[group_key].add(goose_rule.content)
 
     groups = sorted(group for group in groups if group not in DEFAULT_OUTBOUNDS)
 
@@ -77,7 +106,10 @@ def main():
     if groups:
         groups = ", ".join(sorted(groups))
         print(f"# groups: {groups}")
-    print(generated)
+
+    for (rule_type, target_group), contents in goose_groups.items():
+        content = ", ".join(sorted(contents))
+        print(f"{rule_type}({content}) -> {target_group}")
 
 
 if __name__ == "__main__":
