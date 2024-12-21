@@ -1,6 +1,6 @@
 # cat2goose
 
-Rule conversion tool for cat and goose.
+Rule conversion tool for `clash` and `dae`.
 
 ## Run with pip
 
