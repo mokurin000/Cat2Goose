@@ -27,14 +27,15 @@ def absolute_semantic(goose_rules: Iterable[GooseRule]):
     for rule in goose_rules:
         group_key = (rule.rule_type, rule.target_group)
 
-        if last_rule is None:
-            result += f"{rule.rule_type}("
-            last_rule = group_key
-        elif last_rule != group_key:
-            result += f") -> {last_rule[1]}\n{rule.rule_type}("
-            last_rule = group_key
-        else:
-            result += ", "
+        match last_rule:
+            case None:
+                result += f"{rule.rule_type}("
+            case _ if last_rule == group_key:
+                result += ", "
+            case _:
+                result += f") -> {last_rule[1]}\n{rule.rule_type}("
+
+        last_rule = group_key
 
         result += f"{rule.content}"
 
